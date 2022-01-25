@@ -1,0 +1,50 @@
+version: 0.2
+
+env:
+  variables:
+    AWS_ACCOUNT_ID: 746872950938
+    APP_IMAGE_REPO: avro-schema-registry
+    APP_IMAGE_TAG: development
+    AWS_DEFAULT_REGION: us-east-1
+    SECRETS_MANAGER_SECRET_ID: invalid
+    ENABLE_MIGRATIONS: no
+
+phases:
+  pre_build:
+    commands:
+      - |
+        aws ecr get-login-password --region $AWS_DEFAULT_REGION | \
+          docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+  build:
+    commands:
+      - |
+        docker build \
+          --build-arg IMAGE_REPO=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$APP_IMAGE_REPO \
+          --build-arg IMAGE_TAG=$APP_IMAGE_TAG \
+          -f Dockerfile.new \
+          -t $APP_IMAGE_REPO:$APP_IMAGE_TAG .
+      - |
+        docker tag \
+          $APP_IMAGE_REPO:$APP_IMAGE_TAG \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$APP_IMAGE_REPO:$APP_IMAGE_TAG
+  post_build:
+    commands:
+      - |
+        docker push \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$APP_IMAGE_REPO:$APP_IMAGE_TAG
+      - |
+        printf "[{\"name\":\"app\",\"imageUri\":\"%s\"}]" \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$APP_IMAGE_REPO:$APP_IMAGE_TAG | \
+          tr -d ' ' >  imagedefinitions.json
+      - |
+        if [ "$ENABLE_MIGRATIONS" = "yes" ] || [ "$ENABLE_MIGRATIONS" = "1" ] || [ "$ENABLE_MIGRATIONS" = "true" ]; then
+          docker run \
+            -e SECRETS_MANAGER_SECRET_ID="$SECRETS_MANAGER_SECRET_ID" \
+            -e AWS_DEFAULT_REGION="$AWS_DEFAULT_REGION" \
+            -e AWS_CONTAINER_CREDENTIALS_RELATIVE_URI="$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$APP_IMAGE_REPO:$APP_IMAGE_TAG \
+            nf start release -j Procfile.new
+        fi
+
+artifacts:
+    files: imagedefinitions.json
